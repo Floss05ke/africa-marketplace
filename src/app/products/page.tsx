@@ -10,6 +10,7 @@ export default async function ProductsPage() {
     slug: product.slug,
     price: `${product.currency} ${Number(product.basePrice).toLocaleString("en-KE")}`,
     store: product.store.name,
+    storeSlug: product.store.slug,
     category: product.category.name,
   }));
 

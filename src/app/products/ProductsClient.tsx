@@ -98,7 +98,7 @@ export default function ProductsClient({
 
                 <div className="p-5">
                   <a
-                    href={`/store/${encodeURIComponent(product.storeSlug)}`}
+                    href={`/store/${encodeURIComponent(product.storeSlug || product.store)}`}
                     className="text-sm font-semibold text-blue-600 hover:underline"
                   >
                     {product.store}

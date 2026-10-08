@@ -7,36 +7,56 @@ import {
   useState,
 } from "react";
 
-type CartContextType = {
-  cartItems: string[];
-  addToCart: (product: string) => void;
-  removeFromCart: (product: string) => void;
+export type CartItem = {
+  product: string;
+  quantity: number;
 };
 
-const CartContext = createContext<CartContextType | undefined>(
-  undefined
-);
+type CartContextType = {
+  cartItems: CartItem[];
+  addToCart: (product: string) => void;
+  removeFromCart: (product: string) => void;
+  updateQuantity: (product: string, quantity: number) => void;
+  clearCart: () => void;
+};
+
+const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export function CartProvider({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [cartItems, setCartItems] = useState<string[]>([]);
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Load the saved cart once when the website starts
   useEffect(() => {
     try {
-      const savedCart = window.localStorage.getItem(
-        "africaMarketCart"
-      );
+      const savedCart = window.localStorage.getItem("africaMarketCart");
 
       if (savedCart) {
         const parsedCart = JSON.parse(savedCart);
 
         if (Array.isArray(parsedCart)) {
-          setCartItems(parsedCart);
+          if (
+            parsedCart.every(
+              (item) =>
+                typeof item === "object" &&
+                typeof item.product === "string" &&
+                typeof item.quantity === "number"
+            )
+          ) {
+            setCartItems(parsedCart);
+          } else if (
+            parsedCart.every((item) => typeof item === "string")
+          ) {
+            setCartItems(
+              parsedCart.map((product: string) => ({
+                product,
+                quantity: 1,
+              }))
+            );
+          }
         }
       }
     } catch (error) {
@@ -46,11 +66,8 @@ export function CartProvider({
     }
   }, []);
 
-  // Save the cart only after the saved cart has been loaded
   useEffect(() => {
-    if (!loaded) {
-      return;
-    }
+    if (!loaded) return;
 
     try {
       window.localStorage.setItem(
@@ -63,13 +80,39 @@ export function CartProvider({
   }, [cartItems, loaded]);
 
   const addToCart = (product: string) => {
-    setCartItems((current) => [...current, product]);
+    setCartItems((current) => {
+      const existing = current.find((item) => item.product === product);
+
+      if (existing) {
+        return current.map((item) =>
+          item.product === product
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        );
+      }
+
+      return [...current, { product, quantity: 1 }];
+    });
   };
 
   const removeFromCart = (product: string) => {
     setCartItems((current) =>
-      current.filter((item) => item !== product)
+      current.filter((item) => item.product !== product)
     );
+  };
+
+  const updateQuantity = (product: string, quantity: number) => {
+    setCartItems((current) =>
+      current.map((item) =>
+        item.product === product
+          ? { ...item, quantity: Math.max(1, quantity) }
+          : item
+      )
+    );
+  };
+
+  const clearCart = () => {
+    setCartItems([]);
   };
 
   return (
@@ -78,6 +121,8 @@ export function CartProvider({
         cartItems,
         addToCart,
         removeFromCart,
+        updateQuantity,
+        clearCart,
       }}
     >
       {children}
@@ -89,9 +134,7 @@ export function useCart() {
   const context = useContext(CartContext);
 
   if (!context) {
-    throw new Error(
-      "useCart must be used inside CartProvider"
-    );
+    throw new Error("useCart must be used inside CartProvider");
   }
 
   return context;
