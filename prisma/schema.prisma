@@ -192,12 +192,27 @@ model Order {
   total        Decimal       @db.Decimal(12, 2)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  customer     Customer      @relation(fields: [customerId], references: [id])
+  customer     Customer            @relation(fields: [customerId], references: [id])
   payment      Payment?
   vendorOrders VendorOrder[]
+  statusHistory OrderStatusHistory[]
 
   @@index([customerId])
   @@index([status])
+}
+
+model OrderStatusHistory {
+  id          String      @id @default(cuid())
+  orderId     String
+  fromStatus  OrderStatus?
+  toStatus    OrderStatus
+  changedBy   String?
+  note        String?
+  createdAt   DateTime    @default(now())
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([createdAt])
 }
 
 model VendorOrder {
@@ -341,9 +356,18 @@ enum ProductStatus {
 enum OrderStatus {
   PENDING
   CONFIRMED
+  PREPARING
+  READY_FOR_HANDOVER
+  HANDED_TO_DS
+  DS_RECEIVED
+  DS_VERIFIED
+  IN_LOGISTICS
+  OUT_FOR_DELIVERY
+  DELIVERY_ATTEMPTED
+  DELIVERED
+  COMPLETED
   PROCESSING
   SHIPPED
-  DELIVERED
   CANCELLED
   REFUNDED
 }
