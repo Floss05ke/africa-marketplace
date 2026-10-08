@@ -1,5 +1,115 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { randomUUID } from "node:crypto";
+import { Prisma } from "../../../../generated/prisma/client";
+
+function createListingId() {
+  return `TRL-LST-${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
+}
+
+function normalizeVariants(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((variant) => {
+    const item =
+      variant && typeof variant === "object"
+        ? (variant as Record<string, unknown>)
+        : {};
+
+    return {
+      name:
+        typeof item.name === "string"
+          ? item.name.trim()
+          : "",
+      sku:
+        typeof item.sku === "string" && item.sku.trim()
+          ? item.sku.trim()
+          : null,
+      price: Number(item.price),
+      attributes:
+        item.attributes &&
+        typeof item.attributes === "object" &&
+        !Array.isArray(item.attributes)
+          ? item.attributes
+          : null,
+    };
+  });
+}
+
+async function getProductResponse(productId: string) {
+  const product = await prisma.product.findUnique({
+    where: {
+      id: productId,
+    },
+    include: {
+      store: true,
+      category: true,
+      inventory: true,
+      variants: {
+        orderBy: {
+          createdAt: "asc",
+        },
+        include: {
+          inventory: true,
+        },
+      },
+    },
+  });
+
+  if (!product) {
+    return null;
+  }
+
+  return {
+    id: product.id,
+    name: product.name,
+    slug: product.slug,
+    description: product.description,
+    brand: product.brand,
+    sku: product.sku,
+    price: Number(product.basePrice),
+    currency: product.currency,
+    status: product.status,
+    store: {
+      id: product.store.id,
+      name: product.store.name,
+      slug: product.store.slug,
+    },
+    category: {
+      id: product.category.id,
+      name: product.category.name,
+      slug: product.category.slug,
+    },
+    inventory: product.inventory
+      ? {
+          available: product.inventory.available,
+          reserved: product.inventory.reserved,
+          lowStockAt: product.inventory.lowStockAt,
+        }
+      : null,
+    variants: product.variants.map((variant) => ({
+      id: variant.id,
+      listingId: variant.listingId,
+      name: variant.name,
+      sku: variant.sku,
+      price: Number(variant.price),
+      attributes: variant.attributes,
+      inventory: variant.inventory
+        ? {
+            available: variant.inventory.available,
+            reserved: variant.inventory.reserved,
+            lowStockAt: variant.inventory.lowStockAt,
+          }
+        : null,
+      createdAt: variant.createdAt,
+      updatedAt: variant.updatedAt,
+    })),
+    createdAt: product.createdAt,
+    updatedAt: product.updatedAt,
+  };
+}
 
 export async function GET() {
   try {
@@ -25,6 +135,14 @@ export async function GET() {
         store: true,
         category: true,
         inventory: true,
+        variants: {
+          orderBy: {
+            createdAt: "asc",
+          },
+          include: {
+            inventory: true,
+          },
+        },
       },
       orderBy: {
         createdAt: "desc",
@@ -60,6 +178,23 @@ export async function GET() {
               lowStockAt: product.inventory.lowStockAt,
             }
           : null,
+        variants: product.variants.map((variant) => ({
+          id: variant.id,
+          listingId: variant.listingId,
+          name: variant.name,
+          sku: variant.sku,
+          price: Number(variant.price),
+          attributes: variant.attributes,
+          inventory: variant.inventory
+            ? {
+                available: variant.inventory.available,
+                reserved: variant.inventory.reserved,
+                lowStockAt: variant.inventory.lowStockAt,
+              }
+            : null,
+          createdAt: variant.createdAt,
+          updatedAt: variant.updatedAt,
+        })),
         createdAt: product.createdAt,
         updatedAt: product.updatedAt,
       })),
@@ -102,16 +237,24 @@ export async function POST(request: Request) {
         : null;
 
     const brand =
-      typeof body.brand === "string" ? body.brand.trim() : null;
+      typeof body.brand === "string"
+        ? body.brand.trim()
+        : null;
 
     const sku =
-      typeof body.sku === "string" ? body.sku.trim() : "";
+      typeof body.sku === "string"
+        ? body.sku.trim()
+        : "";
 
     const storeId =
-      typeof body.storeId === "string" ? body.storeId : "";
+      typeof body.storeId === "string"
+        ? body.storeId
+        : "";
 
     const categoryId =
-      typeof body.categoryId === "string" ? body.categoryId : "";
+      typeof body.categoryId === "string"
+        ? body.categoryId
+        : "";
 
     const price = Number(body.price);
 
@@ -185,6 +328,45 @@ export async function POST(request: Request) {
       );
     }
 
+    const variants = normalizeVariants(body.variants);
+
+    for (const variant of variants) {
+      if (!variant.name) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Every variant must have a name.",
+          },
+          { status: 400 }
+        );
+      }
+
+      if (!Number.isFinite(variant.price) || variant.price <= 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Every variant must have a valid price greater than zero.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    const variantSkus = variants
+      .map((variant) => variant.sku)
+      .filter((value): value is string => Boolean(value));
+
+    if (new Set(variantSkus).size !== variantSkus.length) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Variant SKUs must be unique within this product.",
+        },
+        { status: 409 }
+      );
+    }
+
     const baseSlug = name
       .toLowerCase()
       .trim()
@@ -195,7 +377,8 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: "Product name cannot create a valid URL slug.",
+          error:
+            "Product name cannot create a valid URL slug.",
         },
         { status: 400 }
       );
@@ -213,7 +396,8 @@ export async function POST(request: Request) {
       suffix += 1;
     }
 
-    // Create without relational includes because
+    // Create parent product first.
+    // We intentionally avoid Prisma transactions because
     // PrismaNeonHttp does not support transactions.
     const product = await prisma.product.create({
       data: {
@@ -231,26 +415,36 @@ export async function POST(request: Request) {
       },
     });
 
-    const [productStore, productCategory] = await Promise.all([
-      prisma.store.findUnique({
-        where: {
-          id: product.storeId,
-        },
-      }),
+    // Create variants/listings under the parent product.
+    const createdVariants = [];
 
-      prisma.category.findUnique({
-        where: {
-          id: product.categoryId,
-        },
-      }),
-    ]);
+    for (const variant of variants) {
+      const listingId = createListingId();
 
-    if (!productStore || !productCategory) {
+      const createdVariant =
+        await prisma.productVariant.create({
+          data: {
+            productId: product.id,
+            listingId,
+            name: variant.name,
+            sku: variant.sku,
+            price: variant.price,
+            attributes: variant.attributes ?? undefined,
+          },
+        });
+
+      createdVariants.push(createdVariant);
+    }
+
+    const responseProduct =
+      await getProductResponse(product.id);
+
+    if (!responseProduct) {
       return NextResponse.json(
         {
           success: false,
           error:
-            "Product was created, but related store or category could not be loaded.",
+            "Product was created, but could not be loaded afterward.",
         },
         { status: 500 }
       );
@@ -259,27 +453,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: true,
-        product: {
-          id: product.id,
-          name: product.name,
-          slug: product.slug,
-          description: product.description,
-          brand: product.brand,
-          sku: product.sku,
-          price: Number(product.basePrice),
-          currency: product.currency,
-          status: product.status,
-          store: {
-            id: productStore.id,
-            name: productStore.name,
-            slug: productStore.slug,
-          },
-          category: {
-            id: productCategory.id,
-            name: productCategory.name,
-            slug: productCategory.slug,
-          },
-        },
+        product: responseProduct,
       },
       { status: 201 }
     );
@@ -327,12 +501,13 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const existingProduct = await prisma.product.findFirst({
-      where: {
-        id: productId,
-        vendorId: vendor.id,
-      },
-    });
+    const existingProduct =
+      await prisma.product.findFirst({
+        where: {
+          id: productId,
+          vendorId: vendor.id,
+        },
+      });
 
     if (!existingProduct) {
       return NextResponse.json(
@@ -344,6 +519,191 @@ export async function PATCH(request: Request) {
       );
     }
 
+    // Variant update.
+    if (body.variantId !== undefined) {
+      const variantId =
+        typeof body.variantId === "string"
+          ? body.variantId
+          : "";
+
+      if (!variantId) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Variant ID is required.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const existingVariant =
+        await prisma.productVariant.findFirst({
+          where: {
+            id: variantId,
+            productId,
+          },
+        });
+
+      if (!existingVariant) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Variant not found.",
+          },
+          { status: 404 }
+        );
+      }
+
+      const variantUpdateData: {
+        name?: string;
+        sku?: string | null;
+        price?: number;
+        attributes?: Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
+      } = {};
+
+      if (body.variantName !== undefined) {
+        if (
+          typeof body.variantName !== "string" ||
+          !body.variantName.trim()
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Variant name cannot be empty.",
+            },
+            { status: 400 }
+          );
+        }
+
+        variantUpdateData.name =
+          body.variantName.trim();
+      }
+
+      if (body.variantSku !== undefined) {
+        if (
+          body.variantSku !== null &&
+          typeof body.variantSku !== "string"
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Variant SKU must be text or null.",
+            },
+            { status: 400 }
+          );
+        }
+
+        const newVariantSku =
+          typeof body.variantSku === "string"
+            ? body.variantSku.trim()
+            : null;
+
+        if (newVariantSku) {
+          const duplicateVariant =
+            await prisma.productVariant.findFirst({
+              where: {
+                productId,
+                sku: newVariantSku,
+                NOT: {
+                  id: variantId,
+                },
+              },
+            });
+
+          if (duplicateVariant) {
+            return NextResponse.json(
+              {
+                success: false,
+                error:
+                  "Another variant under this product already uses that SKU.",
+              },
+              { status: 409 }
+            );
+          }
+        }
+
+        variantUpdateData.sku =
+          newVariantSku || null;
+      }
+
+      if (body.variantPrice !== undefined) {
+        const variantPrice =
+          Number(body.variantPrice);
+
+        if (
+          !Number.isFinite(variantPrice) ||
+          variantPrice <= 0
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                "Variant price must be a valid amount greater than zero.",
+            },
+            { status: 400 }
+          );
+        }
+
+        variantUpdateData.price = variantPrice;
+      }
+
+      if (body.attributes !== undefined) {
+        if (
+          body.attributes !== null &&
+          (typeof body.attributes !== "object" ||
+            Array.isArray(body.attributes))
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Variant attributes must be an object or null.",
+            },
+            { status: 400 }
+          );
+        }
+
+        variantUpdateData.attributes =
+          body.attributes === null
+            ? Prisma.JsonNull
+            : (body.attributes as Prisma.InputJsonValue);
+      }
+
+      if (
+        Object.keys(variantUpdateData).length === 0
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "No valid variant changes were provided.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const updatedVariant =
+        await prisma.productVariant.update({
+          where: {
+            id: variantId,
+          },
+          data: variantUpdateData,
+        });
+
+      return NextResponse.json({
+        success: true,
+        variant: {
+          id: updatedVariant.id,
+          listingId: updatedVariant.listingId,
+          name: updatedVariant.name,
+          sku: updatedVariant.sku,
+          price: Number(updatedVariant.price),
+          attributes: updatedVariant.attributes,
+          updatedAt: updatedVariant.updatedAt,
+        },
+      });
+    }
+
+    // Parent product update.
     const updateData: {
       name?: string;
       description?: string | null;
@@ -352,11 +712,18 @@ export async function PATCH(request: Request) {
       storeId?: string;
       categoryId?: string;
       basePrice?: number;
-      status?: "DRAFT" | "ACTIVE" | "INACTIVE" | "OUT_OF_STOCK";
+      status?:
+        | "DRAFT"
+        | "ACTIVE"
+        | "INACTIVE"
+        | "OUT_OF_STOCK";
     } = {};
 
     if (body.name !== undefined) {
-      if (typeof body.name !== "string" || !body.name.trim()) {
+      if (
+        typeof body.name !== "string" ||
+        !body.name.trim()
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -384,7 +751,10 @@ export async function PATCH(request: Request) {
     }
 
     if (body.sku !== undefined) {
-      if (typeof body.sku !== "string" || !body.sku.trim()) {
+      if (
+        typeof body.sku !== "string" ||
+        !body.sku.trim()
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -396,21 +766,23 @@ export async function PATCH(request: Request) {
 
       const newSku = body.sku.trim();
 
-      const duplicateSku = await prisma.product.findFirst({
-        where: {
-          vendorId: vendor.id,
-          sku: newSku,
-          NOT: {
-            id: productId,
+      const duplicateSku =
+        await prisma.product.findFirst({
+          where: {
+            vendorId: vendor.id,
+            sku: newSku,
+            NOT: {
+              id: productId,
+            },
           },
-        },
-      });
+        });
 
       if (duplicateSku) {
         return NextResponse.json(
           {
             success: false,
-            error: "You already have another product using this SKU.",
+            error:
+              "You already have another product using this SKU.",
           },
           { status: 409 }
         );
@@ -420,7 +792,10 @@ export async function PATCH(request: Request) {
     }
 
     if (body.storeId !== undefined) {
-      if (typeof body.storeId !== "string" || !body.storeId) {
+      if (
+        typeof body.storeId !== "string" ||
+        !body.storeId
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -441,7 +816,8 @@ export async function PATCH(request: Request) {
         return NextResponse.json(
           {
             success: false,
-            error: "Selected store does not belong to this vendor.",
+            error:
+              "Selected store does not belong to this vendor.",
           },
           { status: 400 }
         );
@@ -464,17 +840,19 @@ export async function PATCH(request: Request) {
         );
       }
 
-      const category = await prisma.category.findUnique({
-        where: {
-          id: body.categoryId,
-        },
-      });
+      const category =
+        await prisma.category.findUnique({
+          where: {
+            id: body.categoryId,
+          },
+        });
 
       if (!category) {
         return NextResponse.json(
           {
             success: false,
-            error: "Selected category was not found.",
+            error:
+              "Selected category was not found.",
           },
           { status: 400 }
         );
@@ -484,9 +862,12 @@ export async function PATCH(request: Request) {
     }
 
     if (body.price !== undefined) {
-      const price = Number(body.price);
+      const newPrice = Number(body.price);
 
-      if (!Number.isFinite(price) || price <= 0) {
+      if (
+        !Number.isFinite(newPrice) ||
+        newPrice <= 0
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -497,7 +878,7 @@ export async function PATCH(request: Request) {
         );
       }
 
-      updateData.basePrice = price;
+      updateData.basePrice = newPrice;
     }
 
     if (body.status !== undefined) {
@@ -525,61 +906,37 @@ export async function PATCH(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: "No valid product changes were provided.",
+          error:
+            "No valid product changes were provided.",
         },
         { status: 400 }
       );
     }
 
-    const product = await prisma.product.update({
+    await prisma.product.update({
       where: {
         id: productId,
       },
       data: updateData,
     });
 
-    const [productStore, productCategory] = await Promise.all([
-      prisma.store.findUnique({
-        where: {
-          id: product.storeId,
-        },
-      }),
+    const responseProduct =
+      await getProductResponse(productId);
 
-      prisma.category.findUnique({
-        where: {
-          id: product.categoryId,
+    if (!responseProduct) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Product was updated, but could not be loaded afterward.",
         },
-      }),
-    ]);
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      product: {
-        id: product.id,
-        name: product.name,
-        slug: product.slug,
-        description: product.description,
-        brand: product.brand,
-        sku: product.sku,
-        price: Number(product.basePrice),
-        currency: product.currency,
-        status: product.status,
-        store: productStore
-          ? {
-              id: productStore.id,
-              name: productStore.name,
-              slug: productStore.slug,
-            }
-          : null,
-        category: productCategory
-          ? {
-              id: productCategory.id,
-              name: productCategory.name,
-              slug: productCategory.slug,
-            }
-          : null,
-        updatedAt: product.updatedAt,
-      },
+      product: responseProduct,
     });
   } catch (error) {
     console.error("Vendor products PATCH error:", error);
@@ -625,12 +982,13 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const existingProduct = await prisma.product.findFirst({
-      where: {
-        id: productId,
-        vendorId: vendor.id,
-      },
-    });
+    const existingProduct =
+      await prisma.product.findFirst({
+        where: {
+          id: productId,
+          vendorId: vendor.id,
+        },
+      });
 
     if (!existingProduct) {
       return NextResponse.json(
@@ -678,7 +1036,8 @@ export async function DELETE(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        error: "Unable to deactivate vendor product.",
+        error:
+          "Unable to deactivate vendor product.",
       },
       { status: 500 }
     );
