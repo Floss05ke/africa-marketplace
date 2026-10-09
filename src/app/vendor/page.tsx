@@ -267,7 +267,12 @@ export default function VendorDashboardPage() {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <ActionPlaceholder label="Manage Products" />
-            <ActionPlaceholder label="Manage Inventory" />
+            <a
+              href="/vendor/inventory"
+              className="rounded-xl border border-blue-200 bg-white px-4 py-3 text-center text-sm font-semibold text-blue-700 hover:bg-blue-50"
+            >
+              Manage Inventory
+            </a>
             <ActionPlaceholder label="View Orders" />
             <ActionPlaceholder label="View Payouts" />
           </div>
